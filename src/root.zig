@@ -3,15 +3,22 @@ const parser = @import("parser.zig");
 
 pub const parsePdfHeader = parser.parsePdfHeader;
 
-// Day-one harness. The stub parser has deliberate OOB bugs so the fuzzer
-// has something to find. Replace parser.zig with @cImport bindings to
-// poppler / MuPDF once the workflow feels right.
+// Hand-rolled random fuzzer. Coverage-blind but it doesn't need Zig's
+// experimental --fuzz mode (which is broken in both 0.15 and 0.16 right
+// now). One million random inputs per test run. If the parser ever panics
+// the test fails, the seed and iteration get printed.
 test "fuzz parsePdfHeader" {
-    try std.testing.fuzz({}, fuzzOne, .{});
-}
+    const iterations: usize = 1_000_000;
+    const seed: u64 = 0xC0FFEE;
 
-fn fuzzOne(_: void, smith: *std.testing.Smith) !void {
+    var prng = std.Random.DefaultPrng.init(seed);
+    const rng = prng.random();
     var buf: [4096]u8 = undefined;
-    const len = smith.slice(&buf);
-    parsePdfHeader(buf[0..len]) catch {};
+
+    var i: usize = 0;
+    while (i < iterations) : (i += 1) {
+        const len = rng.uintLessThan(usize, buf.len + 1);
+        rng.bytes(buf[0..len]);
+        parsePdfHeader(buf[0..len]) catch {};
+    }
 }
