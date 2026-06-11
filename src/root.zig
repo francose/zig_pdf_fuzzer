@@ -72,15 +72,18 @@ test "fuzz parsePdfHeader" {
         rng.bytes(buf[0..len]);
 
         // Three bias tiers cycling through iterations:
-        //   tier 0 (25%): %PDF- + valid version digits → exercises the obj_count loop
+        //   tier 0 (25%): %PDF- + valid version + small obj_count → exercises the obj loop
+        //                 and sometimes parses ok (obj_count 0)
         //   tier 1 (25%): %PDF- only → exercises the BadVersion path
         //   tier 2,3 (50%): pure random → exercises BadMagic and acts as control
         const tier = i % 4;
-        if (tier == 0 and len >= 8) {
+        if (tier == 0 and len >= 12) {
             @memcpy(buf[0..5], "%PDF-");
             buf[5] = '1' + rng.uintLessThan(u8, 9);
             buf[6] = '.';
             buf[7] = '0' + rng.uintLessThan(u8, 10);
+            // Small obj_count so the loop body sometimes runs to completion.
+            std.mem.writeInt(u32, buf[8..12], rng.uintLessThan(u32, 16), .little);
         } else if (tier == 1 and len >= 5) {
             @memcpy(buf[0..5], "%PDF-");
         }
