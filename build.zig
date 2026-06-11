@@ -29,17 +29,24 @@ pub fn build(b: *std.Build) void {
     // multiple modules and consumers will need to be able to specify which
     // module they want to access.
     const mod = b.addModule("zig_fuzzer_pdf", .{
-        // The root source file is the "entry point" of this module. Users of
-        // this module will only be able to access public declarations contained
-        // in this file, which means that if you have declarations that you
-        // intend to expose to consumers that were defined in other files part
-        // of this module, you will have to make sure to re-export them from
-        // the root file.
         .root_source_file = b.path("src/root.zig"),
-        // Later on we'll use this module as the root module of a test executable
-        // which requires us to specify a target.
         .target = target,
+        .link_libc = true,
     });
+
+    // MuPDF binding: compile the C shim and link against the static MuPDF
+    // libs plus their runtime dependencies (the Debian package doesn't ship
+    // a pkg-config file, so the link line is hand-maintained).
+    mod.addCSourceFile(.{ .file = b.path("src/mupdf_shim.c"), .flags = &.{} });
+    mod.addIncludePath(b.path("src"));
+    const mupdf_libs = [_][]const u8{
+        "mupdf", "mupdf-third", "jbig2dec",  "openjp2",
+        "gumbo", "mujs",        "harfbuzz",  "freetype",
+        "jpeg",  "z",           "m",         "pthread",
+    };
+    for (mupdf_libs) |name| {
+        mod.linkSystemLibrary(name, .{});
+    }
 
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function

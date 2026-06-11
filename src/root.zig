@@ -1,7 +1,15 @@
 const std = @import("std");
 const parser = @import("parser.zig");
+const mupdf = @import("mupdf.zig");
 
 pub const parsePdfHeader = parser.parsePdfHeader;
+pub const mupdfOpenFromMemory = mupdf.openFromMemory;
+pub const MupdfResult = mupdf.Result;
+
+test "mupdf rejects garbage" {
+    const result = mupdf.openFromMemory("not a pdf, just some bytes");
+    try std.testing.expectEqual(mupdf.Result.rejected, result);
+}
 
 const Stats = struct {
     ok: usize = 0,
