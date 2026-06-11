@@ -51,9 +51,8 @@ fn saveInteresting(input: []const u8) !bool {
 
 // Hand-rolled random fuzzer. Coverage-blind but it doesn't need Zig's
 // experimental --fuzz mode (which is broken in both 0.15 and 0.16 right
-// now). One million inputs per run. Half are prefix-biased with "%PDF-"
-// so the deeper parser logic gets exercised — otherwise ~99% of random
-// inputs die at BadMagic. Inputs that get past the magic check and fail
+// now). One million inputs per run, tiered bias so each parser branch
+// actually gets coverage. Inputs that get past the magic check and fail
 // deeper are saved to crashes/ as replay seeds, capped at 64 per run.
 test "fuzz parsePdfHeader" {
     const iterations: usize = 1_000_000;
@@ -72,9 +71,17 @@ test "fuzz parsePdfHeader" {
         const len = rng.uintLessThan(usize, buf.len + 1);
         rng.bytes(buf[0..len]);
 
-        // Bias half the iterations to start with the PDF magic so we
-        // actually exercise version / obj_count / length parsing.
-        if (i % 2 == 0 and len >= 5) {
+        // Three bias tiers cycling through iterations:
+        //   tier 0 (25%): %PDF- + valid version digits → exercises the obj_count loop
+        //   tier 1 (25%): %PDF- only → exercises the BadVersion path
+        //   tier 2,3 (50%): pure random → exercises BadMagic and acts as control
+        const tier = i % 4;
+        if (tier == 0 and len >= 8) {
+            @memcpy(buf[0..5], "%PDF-");
+            buf[5] = '1' + rng.uintLessThan(u8, 9);
+            buf[6] = '.';
+            buf[7] = '0' + rng.uintLessThan(u8, 10);
+        } else if (tier == 1 and len >= 5) {
             @memcpy(buf[0..5], "%PDF-");
         }
 
