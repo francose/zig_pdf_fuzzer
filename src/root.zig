@@ -2,12 +2,23 @@ const std = @import("std");
 const parser = @import("parser.zig");
 const mupdf = @import("mupdf.zig");
 const poppler = @import("poppler.zig");
+const crash = @import("crash_containment.zig");
 
 pub const parsePdfHeader = parser.parsePdfHeader;
 pub const mupdfOpenFromMemory = mupdf.openFromMemory;
 pub const popplerOpenFromMemory = poppler.openFromMemory;
 pub const MupdfResult = mupdf.Result;
 pub const PopplerResult = poppler.Result;
+
+test "crash containment recovers from a SIGSEGV" {
+    crash.installHandlers();
+    const outcome = crash.triggerSegv("anything");
+    try std.testing.expectEqual(crash.Outcome.crashed, outcome);
+    // If we got here, the SIGSEGV was caught and unwound.
+    // The handler reset state so subsequent parser calls still work.
+    const after = crash.mupdfOpen("not a pdf");
+    try std.testing.expectEqual(crash.Outcome.rejected, after);
+}
 
 test "mupdf rejects garbage" {
     const result = mupdf.openFromMemory("not a pdf, just some bytes");
@@ -38,15 +49,15 @@ fn saveDisagreement(input: []const u8) !void {
     try file.writeAll(input);
 }
 
-// Differential fuzz harness. Generate small biased inputs, feed them
-// through MuPDF and poppler, save any input where the two parsers
-// disagree on accept/reject. Iteration count is small because real
-// C parsers run at ~hundreds of inputs/sec, not 15k like the stub.
-//
-// WARNING: this test currently has no crash containment. If either
-// parser segfaults on an input, the test process dies. Phase 3 of the
-// work adds a SIGSEGV handler that longjmps back into the loop.
+// Differential fuzz harness with crash containment. Generate small
+// biased inputs, feed them through MuPDF and poppler under signal
+// protection, save any input that either crashes a parser OR makes
+// the two parsers disagree on accept/reject. Iteration count is small
+// because real C parsers run at ~hundreds of inputs/sec, not 15k like
+// the stub.
 test "fuzz differential mupdf vs poppler" {
+    crash.installHandlers();
+
     const iterations: usize = 500;
     const seed: u64 = 0xD1FFFEED;
 
@@ -57,24 +68,35 @@ test "fuzz differential mupdf vs poppler" {
     var disagreements: usize = 0;
     var agreements_accept: usize = 0;
     var agreements_reject: usize = 0;
+    var mupdf_crashes: usize = 0;
+    var poppler_crashes: usize = 0;
     var errors: usize = 0;
 
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         const len = rng.uintLessThan(usize, buf.len + 1);
         rng.bytes(buf[0..len]);
-        // All inputs are %PDF- prefixed so we're testing how the two
-        // parsers diverge on payload, not on magic-byte detection.
         if (len >= 5) @memcpy(buf[0..5], "%PDF-");
 
         const input = buf[0..len];
-        const m = mupdf.openFromMemory(input);
-        const p = poppler.openFromMemory(input);
+        const m = crash.mupdfOpen(input);
+        const p = crash.popplerOpen(input);
 
+        if (m == .crashed) {
+            mupdf_crashes += 1;
+            saveDisagreement(input) catch {};
+            continue;
+        }
+        if (p == .crashed) {
+            poppler_crashes += 1;
+            saveDisagreement(input) catch {};
+            continue;
+        }
         if (m == .context_failure or p == .context_failure) {
             errors += 1;
             continue;
         }
+
         const m_ok = m == .parsed;
         const p_ok = p == .parsed;
         if (m_ok == p_ok) {
@@ -92,9 +114,14 @@ test "fuzz differential mupdf vs poppler" {
         \\both accepted:   {d}
         \\both rejected:   {d}
         \\disagreed:       {d}
+        \\mupdf crashes:   {d}
+        \\poppler crashes: {d}
         \\context errors:  {d}
         \\
-    , .{ iterations, agreements_accept, agreements_reject, disagreements, errors });
+    , .{
+        iterations, agreements_accept, agreements_reject, disagreements,
+        mupdf_crashes, poppler_crashes, errors,
+    });
 }
 
 const Stats = struct {

@@ -59,6 +59,11 @@ pub fn build(b: *std.Build) void {
         mod.linkSystemLibrary("asan", .{});
     }
 
+    // Crash containment shim: SIGSEGV/SIGBUS/SIGABRT handler + sigsetjmp
+    // wrapper so a parser crash unwinds back into the harness loop instead
+    // of killing the whole process.
+    mod.addCSourceFile(.{ .file = b.path("src/crash_shim.c"), .flags = c_flags });
+
     // poppler-glib binding: second PDF parser for differential fuzzing.
     // poppler uses GError instead of setjmp so the shim is thin, but it
     // still helps to keep glib types out of the @cImport graph.
