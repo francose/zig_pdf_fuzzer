@@ -59,6 +59,19 @@ pub fn build(b: *std.Build) void {
         mod.linkSystemLibrary("asan", .{});
     }
 
+    // poppler-glib binding: second PDF parser for differential fuzzing.
+    // poppler uses GError instead of setjmp so the shim is thin, but it
+    // still helps to keep glib types out of the @cImport graph.
+    mod.addCSourceFile(.{ .file = b.path("src/poppler_shim.c"), .flags = c_flags });
+    mod.addIncludePath(.{ .cwd_relative = "/usr/include/poppler/glib" });
+    mod.addIncludePath(.{ .cwd_relative = "/usr/include/poppler" });
+    mod.addIncludePath(.{ .cwd_relative = "/usr/include/glib-2.0" });
+    mod.addIncludePath(.{ .cwd_relative = "/usr/lib/x86_64-linux-gnu/glib-2.0/include" });
+    const poppler_libs = [_][]const u8{ "poppler-glib", "glib-2.0", "gobject-2.0" };
+    for (poppler_libs) |name| {
+        mod.linkSystemLibrary(name, .{});
+    }
+
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
     // to the module defined above, it's sometimes preferable to split business
