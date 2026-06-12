@@ -2,4 +2,5 @@
 zig-out/
 .zls.json
 crashes/
+disagreements/
 .vscode/settings.json

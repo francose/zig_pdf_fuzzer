@@ -13,28 +13,34 @@ the code I want to understand.
 
 ## What I'm testing
 
-The PDF header, two targets in the same repo:
+Three parsers in one repo, designed to be compared against each other:
 
-- `src/parser.zig` is a small stub I wrote by hand. It checks the `%PDF-`
-  magic, two version digits, an object count, and a loop of length-prefixed
-  object records. Tiny surface, easy to mess up, perfect for practicing the
-  bug class.
-- `src/mupdf.zig` is the @cImport binding into real MuPDF via a small C
-  shim (`src/mupdf_shim.c`). The shim wraps MuPDF's setjmp/longjmp-based
-  `fz_try` / `fz_catch` error path behind a plain C function the Zig side
-  can call without worrying about non-local control flow.
+- `src/parser.zig` is a small stub I wrote by hand. Magic check, two
+  version digits, obj_count, length-prefixed record loop. Tiny surface,
+  the harness exercises this at 16k inputs/sec.
+- `src/mupdf.zig` is the @cImport binding into real MuPDF, via a C shim
+  (`src/mupdf_shim.c`) that wraps MuPDF's setjmp/longjmp-based `fz_try` /
+  `fz_catch` error path behind a plain C function.
+- `src/poppler.zig` is the @cImport binding into poppler-glib via
+  `src/poppler_shim.c`. Poppler uses GError so no setjmp wrapping needed,
+  but the shim keeps glib types out of the Zig @cImport graph.
 
-The fuzz harness currently exercises the stub. Wiring the harness to send
-bytes at MuPDF is the next step and needs AddressSanitizer + crash
-catching, because real C parsers segfault instead of returning errors.
+The MuPDF and poppler bindings feed a differential test: same input through
+both parsers, save anything either parser crashes on or where the two
+disagree on accept/reject.
 
 Stack:
 
 - Zig 0.15.1, no external runtime deps
 - WSL2 on Linux as the host
-- MuPDF 1.19 from `libmupdf-dev` (static libs at `/usr/lib/libmupdf.a` +
-  `/usr/lib/libmupdf-third.a`, no pkg-config file so the link line is
-  hand-maintained in `build.zig`).
+- MuPDF 1.19 from `libmupdf-dev` (static libs in `/usr/lib`, no
+  pkg-config, link line hand-maintained in `build.zig`).
+- poppler-glib 22.02 from `libpoppler-glib-dev`.
+- AddressSanitizer is optional via `-Dasan=true` (LD_PRELOAD'd at test
+  time; the build wires both link and runtime).
+- Crash containment via sigsetjmp/siglongjmp in `src/crash_shim.c`. A
+  SIGSEGV / SIGBUS / SIGABRT inside a parser call unwinds back into the
+  harness loop instead of killing the process.
 - No external fuzzing engine. Zig's own `--fuzz` mode is broken in 0.15.1
   and 0.16, so the loop is hand-rolled in `src/root.zig`.
 
@@ -63,14 +69,21 @@ length-prefixed record loop, which is the part where the real bugs live.
 ## How I run the analysis
 
 ```sh
-# one million random inputs through the parser
+# all five tests: stub fuzz, mupdf+poppler sanity, crash containment proof,
+# and the differential mupdf-vs-poppler harness
 zig build test
 
-# replay a saved interesting input
+# same tests but with AddressSanitizer wired into the C side
+zig build test -Dasan=true
+
+# replay a saved interesting input through the stub parser
 zig build run -- crashes/<hash>.bin
 ```
 
-A run prints a stats block at the end:
+A run prints two stats blocks: the stub fuzz at the bottom, the
+differential summary above it.
+
+Stub fuzz:
 
 ```
 --- fuzz stats ---
@@ -102,13 +115,38 @@ How to read it:
 Seed is fixed at `0xC0FFEE` so a run is reproducible. Iteration count and
 seed are constants at the top of `src/root.zig`. Change them and rerun.
 
+Differential summary:
+
+```
+--- differential stats ---
+iterations:      500
+both accepted:   0
+both rejected:   500
+disagreed:       0
+mupdf crashes:   0
+poppler crashes: 0
+context errors:  0
+```
+
+500/500 both rejected is expected for tiny random `%PDF-`-prefixed buffers:
+neither parser will accept anything without a valid xref table. Real
+disagreements need either grammar-aware input generation or corpus-based
+mutation, which is the natural next step. Any input that one parser
+accepts and the other rejects, or that crashes either parser under signal
+protection, gets saved to `disagreements/<wyhash>.bin` for triage.
+
 ## Layout
 
-- `src/parser.zig` - the hand-rolled stub parser (the fuzz target today)
-- `src/root.zig` - fuzz harness, stats, save-on-near-miss
+- `src/parser.zig` - the hand-rolled stub parser
+- `src/root.zig` - fuzz + differential harnesses, stats, save-on-disagreement
 - `src/main.zig` - replayer for crashes and corpus samples
-- `src/mupdf_shim.h` / `src/mupdf_shim.c` - C shim wrapping MuPDF's
-  `fz_try` / `fz_catch` behind a plain function the Zig side can call
-- `src/mupdf.zig` - the @cImport binding for the shim
+- `src/mupdf_shim.h` / `src/mupdf_shim.c` - MuPDF C shim (`fz_try`/`fz_catch`)
+- `src/mupdf.zig` - MuPDF @cImport binding
+- `src/poppler_shim.h` / `src/poppler_shim.c` - poppler-glib C shim
+- `src/poppler.zig` - poppler @cImport binding
+- `src/crash_shim.h` / `src/crash_shim.c` - SIGSEGV/SIGBUS/SIGABRT handler
+  + sigsetjmp wrapper for crash containment
+- `src/crash_containment.zig` - Zig-side protected-call wrappers
 - `corpus/` - hand-built seed inputs
-- `crashes/` - auto-saved interesting inputs (gitignored)
+- `crashes/` - auto-saved near-miss inputs from the stub fuzz (gitignored)
+- `disagreements/` - inputs the differential harness flagged (gitignored)
