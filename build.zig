@@ -7,15 +7,17 @@ const std = @import("std");
 // build runner to parallelize the build automatically (and the cache system to
 // know when a step doesn't need to be re-run).
 pub fn build(b: *std.Build) void {
-    // Standard target options allow the person running `zig build` to choose
-    // what target to build for. Here we do not override the defaults, which
-    // means any target is allowed, and the default is native. Other options
-    // for restricting supported target set are available.
     const target = b.standardTargetOptions(.{});
-    // Standard optimization options allow the person running `zig build` to select
-    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
-    // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
+
+    // Opt-in build flag: -Dasan=true enables AddressSanitizer on the C shim
+    // and the resulting binary. Slower at runtime but catches OOB reads
+    // inside MuPDF/poppler that would otherwise corrupt memory silently.
+    const asan = b.option(bool, "asan", "build with AddressSanitizer (default: false)") orelse false;
+    const c_flags: []const []const u8 = if (asan)
+        &.{ "-fsanitize=address", "-fno-omit-frame-pointer", "-g" }
+    else
+        &.{};
     // It's also possible to define more custom flags to toggle optional features
     // of this build script using `b.option()`. All defined flags (including
     // target and optimize options) will be listed when running `zig build --help`
@@ -37,7 +39,7 @@ pub fn build(b: *std.Build) void {
     // MuPDF binding: compile the C shim and link against the static MuPDF
     // libs plus their runtime dependencies (the Debian package doesn't ship
     // a pkg-config file, so the link line is hand-maintained).
-    mod.addCSourceFile(.{ .file = b.path("src/mupdf_shim.c"), .flags = &.{} });
+    mod.addCSourceFile(.{ .file = b.path("src/mupdf_shim.c"), .flags = c_flags });
     mod.addIncludePath(b.path("src"));
     const mupdf_libs = [_][]const u8{
         "mupdf", "mupdf-third", "jbig2dec",  "openjp2",
@@ -46,6 +48,15 @@ pub fn build(b: *std.Build) void {
     };
     for (mupdf_libs) |name| {
         mod.linkSystemLibrary(name, .{});
+    }
+    if (asan) {
+        // GCC ships libasan under its own runtime dir; Zig doesn't look there
+        // by default. Linking it dynamically satisfies the __asan_init etc
+        // symbols the C shim's instrumentation needs. The init-order
+        // requirement ("runtime does not come first") is handled separately
+        // via LD_PRELOAD on the test run steps below.
+        mod.addLibraryPath(.{ .cwd_relative = "/usr/lib/gcc/x86_64-linux-gnu/11" });
+        mod.linkSystemLibrary("asan", .{});
     }
 
     // Here we define an executable. An executable needs to have a root module
@@ -141,6 +152,22 @@ pub fn build(b: *std.Build) void {
 
     // A run step that will run the second test executable.
     const run_exe_tests = b.addRunArtifact(exe_tests);
+
+    if (asan) {
+        // Preload libasan so its runtime initializes first. Static-link
+        // would require the asan preinit object as the very first object on
+        // the link line, which Zig's build system doesn't expose cleanly.
+        const asan_so = "/usr/lib/x86_64-linux-gnu/libasan.so.6";
+        run_mod_tests.setEnvironmentVariable("LD_PRELOAD", asan_so);
+        run_exe_tests.setEnvironmentVariable("LD_PRELOAD", asan_so);
+        run_cmd.setEnvironmentVariable("LD_PRELOAD", asan_so);
+        // MuPDF context allocations leak by design when fz_throw aborts mid-init.
+        // Tell ASan to ignore those so real bugs aren't drowned out.
+        const asan_opts = "detect_leaks=0";
+        run_mod_tests.setEnvironmentVariable("ASAN_OPTIONS", asan_opts);
+        run_exe_tests.setEnvironmentVariable("ASAN_OPTIONS", asan_opts);
+        run_cmd.setEnvironmentVariable("ASAN_OPTIONS", asan_opts);
+    }
 
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
