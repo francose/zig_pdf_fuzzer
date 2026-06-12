@@ -7,15 +7,8 @@
 extern "C" {
 #endif
 
-// Try to open `data` of length `len` as a PDF using poppler-glib. Poppler
-// uses GError-style error reporting (no setjmp), so the shim is thinner
-// than the MuPDF one: it exists mainly to keep glib/poppler headers out
-// of the Zig @cImport graph.
-//
-// Return values:
-//    1  parsed and opened the document
-//    0  poppler rejected the input
-//   -1  GBytes allocation failed (very rare)
+// poppler version of the mupdf shim. same return shape:
+// 1 parsed, 0 rejected, -1 alloc fail.
 int safe_open_pdf_poppler(const unsigned char *data, size_t len);
 
 #ifdef __cplusplus

@@ -4,8 +4,8 @@
 #include <string.h>
 #include <unistd.h>
 
-// Single jump target. Not thread-safe by design: the fuzz harness is
-// single-threaded. If we ever go multi-thread, this becomes _Thread_local.
+// single threaded harness, so a global jmp_buf is fine.
+// if this ever goes multi thread these become _Thread_local.
 static sigjmp_buf g_env;
 static volatile sig_atomic_t g_in_protected = 0;
 
@@ -14,7 +14,7 @@ static void crash_handler(int sig) {
         g_in_protected = 0;
         siglongjmp(g_env, 1);
     }
-    // Outside a protected region the signal is fatal. Don't try to be clever.
+    // outside protection the signal is real, dont try to be clever.
     _exit(128 + sig);
 }
 
@@ -33,7 +33,7 @@ int protected_call_pdf(int (*fn)(const unsigned char *, size_t),
                        const unsigned char *data, size_t len,
                        int *result_out) {
     if (sigsetjmp(g_env, 1) != 0) {
-        // Returned here via siglongjmp out of the signal handler.
+        // came back here via siglongjmp from the handler
         return 1;
     }
     g_in_protected = 1;

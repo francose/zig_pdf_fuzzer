@@ -6,7 +6,7 @@ pub const ParseError = error{
     Truncated,
 };
 
-// Stub parser. Stand-in for the real poppler/MuPDF hook we'll wire in next.
+// stub parser. stand in for the real mupdf/poppler hook.
 pub fn parsePdfHeader(input: []const u8) ParseError!void {
     if (input.len < 5 or !std.mem.eql(u8, input[0..5], "%PDF-")) {
         return error.BadMagic;

@@ -14,8 +14,7 @@ test "crash containment recovers from a SIGSEGV" {
     crash.installHandlers();
     const outcome = crash.triggerSegv("anything");
     try std.testing.expectEqual(crash.Outcome.crashed, outcome);
-    // If we got here, the SIGSEGV was caught and unwound.
-    // The handler reset state so subsequent parser calls still work.
+    // if we got here the segv was caught. next parser call should still work.
     const after = crash.mupdfOpen("not a pdf");
     try std.testing.expectEqual(crash.Outcome.rejected, after);
 }
@@ -30,8 +29,7 @@ test "poppler rejects garbage" {
     try std.testing.expectEqual(poppler.Result.rejected, result);
 }
 
-// Persist a buffer that produced different accept/reject results across
-// parsers to disagreements/<hash>.bin. These are the inputs worth eyeballing.
+// inputs the two parsers disagreed on. dedup'd by hash.
 fn saveDisagreement(input: []const u8) !void {
     var h = std.hash.Wyhash.init(0);
     h.update(input);
@@ -49,12 +47,8 @@ fn saveDisagreement(input: []const u8) !void {
     try file.writeAll(input);
 }
 
-// Differential fuzz harness with crash containment. Generate small
-// biased inputs, feed them through MuPDF and poppler under signal
-// protection, save any input that either crashes a parser OR makes
-// the two parsers disagree on accept/reject. Iteration count is small
-// because real C parsers run at ~hundreds of inputs/sec, not 15k like
-// the stub.
+// 500 iters because real parsers are slow vs the stub. saves disagreements
+// and any input that crashed either one.
 test "fuzz differential mupdf vs poppler" {
     crash.installHandlers();
 
@@ -145,10 +139,8 @@ const Stats = struct {
     }
 };
 
-// Writes an input we'd want to replay (parser got past the magic check
-// but failed deeper) to crashes/<hash>.bin. Dedup'd by content hash so
-// the same byte sequence doesn't get written twice. Returns true only
-// when a new file was actually written.
+// inputs that got past the magic check and died deeper. dedup'd by hash.
+// returns true only when a new file was written.
 fn saveInteresting(input: []const u8) !bool {
     var h = std.hash.Wyhash.init(0);
     h.update(input);
@@ -170,11 +162,9 @@ fn saveInteresting(input: []const u8) !bool {
     return true;
 }
 
-// Hand-rolled random fuzzer. Coverage-blind but it doesn't need Zig's
-// experimental --fuzz mode (which is broken in both 0.15 and 0.16 right
-// now). One million inputs per run, tiered bias so each parser branch
-// actually gets coverage. Inputs that get past the magic check and fail
-// deeper are saved to crashes/ as replay seeds, capped at 64 per run.
+// 1M random inputs against the stub. zigs builtin --fuzz mode is broken in
+// both 0.15 and 0.16 so the loop is hand rolled. tiered bias gives each
+// parser branch real coverage. saves up to 64 near miss inputs per run.
 test "fuzz parsePdfHeader" {
     const iterations: usize = 1_000_000;
     const seed: u64 = 0xC0FFEE;
@@ -192,18 +182,16 @@ test "fuzz parsePdfHeader" {
         const len = rng.uintLessThan(usize, buf.len + 1);
         rng.bytes(buf[0..len]);
 
-        // Three bias tiers cycling through iterations:
-        //   tier 0 (25%): %PDF- + valid version + small obj_count → exercises the obj loop
-        //                 and sometimes parses ok (obj_count 0)
-        //   tier 1 (25%): %PDF- only → exercises the BadVersion path
-        //   tier 2,3 (50%): pure random → exercises BadMagic and acts as control
+        // tier 0: magic + valid version + small obj_count, hits the obj loop
+        // tier 1: magic only, hits BadVersion
+        // tier 2,3: random, control + BadMagic coverage
         const tier = i % 4;
         if (tier == 0 and len >= 12) {
             @memcpy(buf[0..5], "%PDF-");
             buf[5] = '1' + rng.uintLessThan(u8, 9);
             buf[6] = '.';
             buf[7] = '0' + rng.uintLessThan(u8, 10);
-            // Small obj_count so the loop body sometimes runs to completion.
+            // small obj_count so the loop sometimes runs to completion
             std.mem.writeInt(u32, buf[8..12], rng.uintLessThan(u32, 16), .little);
         } else if (tier == 1 and len >= 5) {
             @memcpy(buf[0..5], "%PDF-");

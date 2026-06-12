@@ -7,23 +7,16 @@
 extern "C" {
 #endif
 
-// Install SIGSEGV / SIGBUS / SIGABRT handlers that siglongjmp back into
-// a protected_call_pdf invocation. Call once at harness startup.
+// call once before any protected_call_pdf
 void install_crash_handlers(void);
 
-// Call `fn(data, len)` under crash protection. If `fn` segfaults / busfaults
-// / aborts, the harness unwinds back here and `*result_out` is left
-// unchanged. Otherwise `*result_out` receives whatever `fn` returned.
-//
-// Returns:
-//   0 on normal completion
-//   1 on caught signal
+// runs fn(data, len) under signal protection.
+// returns 0 normal, 1 if a crash was caught and unwound.
 int protected_call_pdf(int (*fn)(const unsigned char *, size_t),
                        const unsigned char *data, size_t len,
                        int *result_out);
 
-// Test helper: deliberately dereference a NULL pointer. Used to verify
-// the crash containment harness actually catches a SIGSEGV.
+// null deref. used by the test to confirm we actually recover.
 int deliberate_segv(const unsigned char *data, size_t len);
 
 #ifdef __cplusplus

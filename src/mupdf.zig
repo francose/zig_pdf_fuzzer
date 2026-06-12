@@ -9,10 +9,7 @@ pub const Result = enum {
     context_failure,
 };
 
-// Feed bytes into MuPDF and see whether it accepts them as a PDF.
-// Calls into the C shim which wraps MuPDF's setjmp/longjmp error path,
-// so this is safe to call from Zig without worrying about non-local
-// control flow leaking up the stack.
+// returns whether mupdf accepted the bytes. shim handles the fz_try stuff.
 pub fn openFromMemory(input: []const u8) Result {
     const rc = c.safe_open_pdf(input.ptr, input.len);
     return switch (rc) {

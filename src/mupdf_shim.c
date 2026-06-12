@@ -10,9 +10,7 @@ int safe_open_pdf(const unsigned char *data, size_t len) {
     fz_context *ctx = fz_new_context(NULL, NULL, FZ_STORE_DEFAULT);
     if (!ctx) return -1;
 
-    // Swallow MuPDF's "error: cannot find startxref" chatter so the fuzz
-    // harness output stays readable. We only care about the return value,
-    // not the message.
+    // silence the "cannot find startxref" chatter so fuzz output stays clean.
     fz_set_warning_callback(ctx, quiet_callback, NULL);
     fz_set_error_callback(ctx, quiet_callback, NULL);
 

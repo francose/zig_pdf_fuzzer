@@ -1,8 +1,7 @@
 const std = @import("std");
 const lib = @import("zig_fuzzer_pdf");
 
-// Replays a single file through the parser. Use it on corpus samples or
-// on crash inputs the fuzzer writes out.
+// replays one file through the stub parser. corpus samples or saved crashes.
 //   zig build run -- corpus/seed01.bin
 pub fn main() !void {
     var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
